@@ -48,45 +48,49 @@ def check_grammar(request: GrammarRequest):
     
     corrected_parts = []
     
-    # Iterate through sentences to apply corrections
     for sent in doc.sents:
-        sent_text = sent.text_with_ws
+        # Get all tokens as a list of strings (preserving whitespace)
+        tokens = [t.text_with_ws for t in sent]
         
-        # 1. Basic Capitalization
-        if sent_text and sent_text[0].islower():
-             sent_text = sent_text[0].upper() + sent_text[1:]
+        # 1. Capitalization Fix
+        # Check the first token of the sentence
+        if tokens:
+            first_word = tokens[0]
+            # capitalization might affect just the text part, need to be careful with whitespace
+            if first_word and first_word[0].islower():
+                tokens[0] = first_word[0].upper() + first_word[1:]
         
-        # 2. Fix repeated words (e.g. "the the")
-        tokens = [token.text_with_ws for token in sent]
-        new_tokens = []
+        # 2. Repeated Word Fix
+        # We will rebuild the list of valid tokens
+        final_sent_tokens = []
         skip_next = False
         
         for i in range(len(sent)):
             if skip_next:
                 skip_next = False
                 continue
-                
-            token = sent[i]
             
-            # Check for repeated words text (case insensitive)
+            # Use the 'tokens' list which might have the capitalized first word
+            current_str = tokens[i]
+            
+            # For comparison logic, we look at the underlying spaCy token
+            current_token_obj = sent[i]
+            
             if i < len(sent) - 1:
-                next_token = sent[i+1]
-                if token.text.lower() == next_token.text.lower() and token.pos_ != "PUNCT":
-                    # Keep the one with whitespace if applicable, or just the first
-                    # We skip the second instance
+                next_token_obj = sent[i+1]
+                
+                # Check if words match (case insensitive) and are not punctuation
+                if (current_token_obj.text.lower() == next_token_obj.text.lower() 
+                    and current_token_obj.pos_ != "PUNCT"):
+                    
+                    # Found duplicate. 
+                    # Generally, we keep the FIRST one (which might have space) and skip the second.
                     skip_next = True
             
-            new_tokens.append(tokens[i])
+            final_sent_tokens.append(current_str)
+            
+        corrected_parts.append("".join(final_sent_tokens))
 
-        # Reconstruct sentence
-        fixed_sent = "".join(new_tokens)
-        
-        # 3. Simple 'a' vs 'an' fix (heuristic) 
-        # This is a bit complex to do perfectly with just tokens, so we'll do a simple string replace for demo
-        # A robust solution would check the phonetics of the next word.
-        
-        corrected_parts.append(fixed_sent)
-    
     final_corrected = "".join(corrected_parts)
     
     # Simple post-processing fixes
@@ -99,6 +103,5 @@ def check_grammar(request: GrammarRequest):
     )
 
 if __name__ == "__main__":
-    # Run on port 14300 to avoid conflicts
+    # We run on localhost 14300
     uvicorn.run(app, host="127.0.0.1", port=14300)
-```
