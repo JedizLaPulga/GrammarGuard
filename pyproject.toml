@@ -1,0 +1,20 @@
+[project]
+name = "grammarguard"
+version = "0.1.0"
+description = "A privacy-first AI grammar corrector that runs 100% offline."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+dependencies = [
+    "spacy>=3.7.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["grammarguard"]
