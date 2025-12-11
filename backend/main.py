@@ -3,28 +3,16 @@ from pydantic import BaseModel
 import spacy
 import uvicorn
 import os
-
-# Initialize FastAPI app
-app = FastAPI(title="GrammarGuard Backend")
+from contextlib import asynccontextmanager
 
 # Global variable to hold the model
 nlp = None
 
-class GrammarRequest(BaseModel):
-    text: str
-
-class GrammarResponse(BaseModel):
-    original_text: str
-    corrected_text: str
-    # We can add more detailed error info later
-
-@app.on_event("startup")
-def load_model():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global nlp
     try:
         print("Loading spaCy model...")
-        # Load the small internet-trained model
-        # The user needs to download this: python -m spacy download en_core_web_sm
         if not spacy.util.is_package("en_core_web_sm"):
              print("Model 'en_core_web_sm' not found. Downloading...")
              os.system("python -m spacy download en_core_web_sm")
@@ -33,6 +21,17 @@ def load_model():
         print("Model loaded successfully!")
     except Exception as e:
         print(f"Error loading model: {e}")
+    yield
+
+# Initialize FastAPI app
+app = FastAPI(title="GrammarGuard Backend", lifespan=lifespan)
+
+class GrammarRequest(BaseModel):
+    text: str
+
+class GrammarResponse(BaseModel):
+    original_text: str
+    corrected_text: str
 
 @app.get("/health")
 def health_check():
@@ -47,16 +46,11 @@ def check_grammar(request: GrammarRequest):
     
     doc = nlp(request.text)
     
-    # Placeholder logic for "correction" 
-    # Real grammar correction with spaCy usually requires complex rules 
-    # or a specific model. For now, we will just return the analysis.
-    # We'll stick to a pass-through response for this step to verify connectivity.
-    
     return GrammarResponse(
         original_text=request.text,
-        corrected_text=request.text # TODO: Implement actual correction logic
+        corrected_text=request.text 
     )
 
 if __name__ == "__main__":
-    # We run on localhost 8000
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    # Run on port 14300 to avoid conflicts
+    uvicorn.run(app, host="127.0.0.1", port=14300)
