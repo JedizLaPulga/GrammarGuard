@@ -5,6 +5,7 @@ import uvicorn
 import os
 from contextlib import asynccontextmanager
 from spellchecker import SpellChecker
+import lemminflect
 
 # Global variables to hold the models
 nlp = None
@@ -51,86 +52,125 @@ def check_grammar(request: GrammarRequest):
     if not nlp or not spell:
         raise HTTPException(status_code=503, detail="Models not loaded yet")
     
-    doc = nlp(request.text)
+    # --- STEP 1: Basic Corrections (Spell Check & Capitalization) ---
+    # We do a first pass to fix spelling so the parser has clean text to work with.
     
-    corrected_parts = []
+    doc_initial = nlp(request.text)
+    step1_tokens = []
     
-    for sent in doc.sents:
-        # Get all tokens as a list of strings (preserving whitespace)
-        tokens = [t.text_with_ws for t in sent]
+    for sent in doc_initial.sents:
+        sent_tokens = [t.text_with_ws for t in sent]
         
         # 1. Capitalization Fix
-        # Check the first token of the sentence
-        if tokens:
-            first_word_str = tokens[0]
-            # tokens[0] is string like "hello "
-            # Check if it starts with lower case letter
+        if sent_tokens:
+            first_word_str = sent_tokens[0]
             if first_word_str and first_word_str[0].islower():
-                # Capitalize first char
-                tokens[0] = first_word_str[0].upper() + first_word_str[1:]
+                sent_tokens[0] = first_word_str[0].upper() + first_word_str[1:]
         
         # 2. Spell Checker Fix
         for i, token in enumerate(sent):
-            # Skip non-alpha characters
-            if not token.is_alpha:
-                continue
-                
-            # Skip entities ONLY if they seem to be acting as proper nouns (capitalized)
-            # spaCy sometimes misclassifies lowercase garbage as ORG, so we shouldn't skip those.
-            if token.ent_type_ and not token.text[0].islower():
-                continue
-                
-            # extracting the word part from the potentially modified token string
-            # (Note: Capitalization fix might have modified tokens[0])
-            current_str = tokens[i]
+            if not token.is_alpha: continue
+            # Skip capitalized entities (heuristics)
+            if token.ent_type_ and not token.text[0].islower(): continue
             
-            # We assume the whitespace is at the end.
-            # token.whitespace_ gives the original whitespace.
-            # Let's trust that we only modified the text part so far.
+            current_str = sent_tokens[i]
             whitespace = token.whitespace_
             word_part = current_str[:len(current_str) - len(whitespace)] if whitespace else current_str
             
-            # Check correction
-            # unknown() takes a list
             if word_part.lower() not in spell:
                  correction = spell.correction(word_part)
                  if correction and correction.lower() != word_part.lower():
-                     # Preserve original capitalization style if simple title case
-                     if word_part[0].isupper():
-                         correction = correction.capitalize()
-                     
-                     # Update token
-                     tokens[i] = correction + whitespace
+                     if word_part[0].isupper(): correction = correction.capitalize()
+                     sent_tokens[i] = correction + (whitespace if whitespace else "")
+        
+        step1_tokens.extend(sent_tokens)
+        
+    text_step1 = "".join(step1_tokens)
+    
+    # --- STEP 2: Advanced Grammar (Subject-Verb Agreement) & Repeats ---
+    # Re-parse the cleaner text to get accurate dependency tree
+    doc_step2 = nlp(text_step1)
+    corrected_parts = []
+    
+    for sent in doc_step2.sents:
+        # We work with mutable list of token strings from the new doc
+        tokens = [t.text_with_ws for t in sent]
+        
+        # 3. Subject-Verb Agreement (SVA)
+        for token in sent:
+            if token.pos_ in ["VERB", "AUX"]:
+                subjects = [child for child in token.children if child.dep_ == "nsubj"]
+                if subjects:
+                    subj = subjects[0] # Take the first subject
+                    
+                    is_plural_subj = False
+                    if subj.tag_ in ["NNS", "NNPS"]:
+                        is_plural_subj = True
+                    elif subj.pos_ == "PRON":
+                        lower_subj = subj.text.lower()
+                        if lower_subj in ["they", "we", "you"]:
+                            is_plural_subj = True
+                    
+                    # Target Tag Selection
+                    target_tag = None
+                    
+                    # CASE A: "I" (Special)
+                    if subj.text.lower() == "i":
+                        # If verb is 'be', needs special handling ("am", "was")
+                        if token.lemma_ == "be":
+                            if token.tag_ == "VBZ" or token.text.lower() in ["is", "are"]:
+                                # Force to 'am' (present) or 'was' (past)
+                                # This is simplistic, let's assume present tense 'am' if it was 'is/are'
+                                # But if it was 'were', maintain past.
+                                if token.text.lower() in ["is", "are"]:
+                                    # Manually fix specific be-verbs for 'I'
+                                    idx = token.i - sent.start
+                                    tokens[idx] = "am" + token.whitespace_
+                                    continue # Skip standard inflection
+                            target_tag = "VBP" # I have, I go
+                        else:
+                            target_tag = "VBP" # I run
 
-        # 3. Repeated Word Fix
-        # We will rebuild the list of valid tokens using the UPDATED tokens list
+                    # CASE B: Plural (You, We, They, Dogs)
+                    elif is_plural_subj:
+                         target_tag = "VBP" # They run, You are
+                         
+                    # CASE C: Singular (He, She, It, Dog)
+                    else:
+                         target_tag = "VBZ" # She runs, It is
+                    
+                    # Apply correction if needed
+                    if target_tag:
+                        # Don't change if already correct
+                        if token.tag_ != target_tag:
+                            new_verb = token._.inflect(target_tag)
+                            if new_verb:
+                                idx = token.i - sent.start
+                                tokens[idx] = new_verb + token.whitespace_
+
+        # 4. Repeated Word Fix (Simple String Match on the Grammar-Corrected Text)
         final_sent_tokens = []
         skip_next = False
         
-        for i in range(len(sent)):
+        for i in range(len(tokens)):
             if skip_next:
                 skip_next = False
                 continue
             
-            current_str = tokens[i]
-            # For comparison, we grab the word part again (strip ws)
-            current_word_clean = current_str.strip()
+            curr_str = tokens[i]
+            curr_word = curr_str.strip()
             
-            if i < len(sent) - 1:
+            if i < len(tokens) - 1:
                 next_str = tokens[i+1]
-                next_word_clean = next_str.strip()
+                next_word = next_str.strip()
                 
-                # Check if words match (case insensitive) and original POS was not PUNCT
-                # We use sent[i].pos_ because checking punctuation on corrected text is tricky without re-parsing,
-                # and punctuation shouldn't have changed during spell check/capitalization ideally.
-                if (current_word_clean.lower() == next_word_clean.lower() 
-                    and sent[i].pos_ != "PUNCT"):
-                    
-                    # Found duplicate. 
-                    skip_next = True
+                if curr_word and curr_word.lower() == next_word.lower():
+                     # Only skip if it looks like a word, not punctuation ".."
+                     if curr_word[0].isalnum():
+                         skip_next = True
             
-            final_sent_tokens.append(current_str)
-            
+            final_sent_tokens.append(curr_str)
+
         corrected_parts.append("".join(final_sent_tokens))
 
     final_corrected = "".join(corrected_parts)
