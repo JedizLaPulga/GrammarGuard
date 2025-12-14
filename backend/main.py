@@ -4,13 +4,15 @@ import spacy
 import uvicorn
 import os
 from contextlib import asynccontextmanager
+from spellchecker import SpellChecker
 
-# Global variable to hold the model
+# Global variables to hold the models
 nlp = None
+spell = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global nlp
+    global nlp, spell
     try:
         print("Loading spaCy model...")
         if not spacy.util.is_package("en_core_web_sm"):
@@ -18,9 +20,14 @@ async def lifespan(app: FastAPI):
              os.system("python -m spacy download en_core_web_sm")
         
         nlp = spacy.load("en_core_web_sm")
-        print("Model loaded successfully!")
+        print("spaCy model loaded successfully!")
+        
+        print("Loading spell checker...")
+        spell = SpellChecker()
+        print("Spell checker loaded successfully!")
+        
     except Exception as e:
-        print(f"Error loading model: {e}")
+        print(f"Error loading models: {e}")
     yield
 
 # Initialize FastAPI app
@@ -35,14 +42,14 @@ class GrammarResponse(BaseModel):
 
 @app.get("/health")
 def health_check():
-    if nlp:
-        return {"status": "ok", "message": "Model is ready"}
-    return {"status": "loading", "message": "Model is still loading"}
+    if nlp and spell:
+        return {"status": "ok", "message": "Models are ready"}
+    return {"status": "loading", "message": "Models are still loading"}
 
 @app.post("/check", response_model=GrammarResponse)
 def check_grammar(request: GrammarRequest):
-    if not nlp:
-        raise HTTPException(status_code=503, detail="Model not loaded yet")
+    if not nlp or not spell:
+        raise HTTPException(status_code=503, detail="Models not loaded yet")
     
     doc = nlp(request.text)
     
@@ -55,13 +62,43 @@ def check_grammar(request: GrammarRequest):
         # 1. Capitalization Fix
         # Check the first token of the sentence
         if tokens:
-            first_word = tokens[0]
-            # capitalization might affect just the text part, need to be careful with whitespace
-            if first_word and first_word[0].islower():
-                tokens[0] = first_word[0].upper() + first_word[1:]
+            first_word_str = tokens[0]
+            # tokens[0] is string like "hello "
+            # Check if it starts with lower case letter
+            if first_word_str and first_word_str[0].islower():
+                # Capitalize first char
+                tokens[0] = first_word_str[0].upper() + first_word_str[1:]
         
-        # 2. Repeated Word Fix
-        # We will rebuild the list of valid tokens
+        # 2. Spell Checker Fix
+        for i, token in enumerate(sent):
+            # Skip non-alpha characters and entities (like names)
+            if not token.is_alpha or token.ent_type_:
+                continue
+                
+            # extracting the word part from the potentially modified token string
+            # (Note: Capitalization fix might have modified tokens[0])
+            current_str = tokens[i]
+            
+            # We assume the whitespace is at the end.
+            # token.whitespace_ gives the original whitespace.
+            # Let's trust that we only modified the text part so far.
+            whitespace = token.whitespace_
+            word_part = current_str[:len(current_str) - len(whitespace)] if whitespace else current_str
+            
+            # Check correction
+            # unknown() takes a list
+            if word_part.lower() not in spell:
+                 correction = spell.correction(word_part)
+                 if correction and correction.lower() != word_part.lower():
+                     # Preserve original capitalization style if simple title case
+                     if word_part[0].isupper():
+                         correction = correction.capitalize()
+                     
+                     # Update token
+                     tokens[i] = correction + whitespace
+
+        # 3. Repeated Word Fix
+        # We will rebuild the list of valid tokens using the UPDATED tokens list
         final_sent_tokens = []
         skip_next = False
         
@@ -70,21 +107,21 @@ def check_grammar(request: GrammarRequest):
                 skip_next = False
                 continue
             
-            # Use the 'tokens' list which might have the capitalized first word
             current_str = tokens[i]
-            
-            # For comparison logic, we look at the underlying spaCy token
-            current_token_obj = sent[i]
+            # For comparison, we grab the word part again (strip ws)
+            current_word_clean = current_str.strip()
             
             if i < len(sent) - 1:
-                next_token_obj = sent[i+1]
+                next_str = tokens[i+1]
+                next_word_clean = next_str.strip()
                 
-                # Check if words match (case insensitive) and are not punctuation
-                if (current_token_obj.text.lower() == next_token_obj.text.lower() 
-                    and current_token_obj.pos_ != "PUNCT"):
+                # Check if words match (case insensitive) and original POS was not PUNCT
+                # We use sent[i].pos_ because checking punctuation on corrected text is tricky without re-parsing,
+                # and punctuation shouldn't have changed during spell check/capitalization ideally.
+                if (current_word_clean.lower() == next_word_clean.lower() 
+                    and sent[i].pos_ != "PUNCT"):
                     
                     # Found duplicate. 
-                    # Generally, we keep the FIRST one (which might have space) and skip the second.
                     skip_next = True
             
             final_sent_tokens.append(current_str)
