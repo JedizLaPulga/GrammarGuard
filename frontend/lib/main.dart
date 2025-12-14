@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'api_service.dart';
 
+import 'package:http/http.dart' as http;
+
 void main() {
   runApp(const GrammarGuardApp());
   BackendManager.startBackend();
@@ -12,7 +14,29 @@ void main() {
 class BackendManager {
   static Process? _process;
 
+  static Future<bool> _isBackendRunning() async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://127.0.0.1:14300/health'),
+      );
+      if (response.statusCode == 200) {
+        return true;
+      }
+    } catch (e) {
+      // Connection failed, so it's not running
+    }
+    return false;
+  }
+
   static Future<void> startBackend() async {
+    // 1. Check if already running
+    if (await _isBackendRunning()) {
+      print("Backend is already running. attaching to existing instance.");
+      return;
+    }
+
+    print("Backend not found. Starting new instance...");
+
     String pythonExecutable = 'python';
     String scriptPath = 'backend/main.py';
 

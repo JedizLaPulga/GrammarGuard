@@ -2,9 +2,20 @@ import requests
 import time
 
 def test_backend():
-    url = "http://127.0.0.1:14300/check"
+    base_url = "http://127.0.0.1:14300"
+    
+    print("Checking health...")
+    try:
+        health = requests.get(f"{base_url}/health")
+        print(f"Health Status: {health.status_code}")
+        print("Health Response:", health.json())
+    except Exception as e:
+        print(f"Health check failed: {e}")
+        return
+
+    url = f"{base_url}/check"
     text = "the qick brown fox jumps over the the lazy dog."
-    print(f"Sending text: '{text}'")
+    print(f"\nSending text: '{text}'")
     
     try:
         response = requests.post(url, json={"text": text})
@@ -17,6 +28,4 @@ def test_backend():
         print(f"Failed to connect: {e}")
 
 if __name__ == "__main__":
-    # Wait a bit for server to start if we just ran it
-    time.sleep(3) 
     test_backend()
