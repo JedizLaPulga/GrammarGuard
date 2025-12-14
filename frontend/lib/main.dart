@@ -17,15 +17,18 @@ class BackendManager {
     String scriptPath = 'backend/main.py';
 
     if (Platform.isWindows) {
-      // List of possible locations relative to the executable or project root
-      // When running 'flutter run', generic CWD might be different than build output.
-      // We explicitly check for the existence of venv.
+      print("Current Working Directory: ${Directory.current.path}");
 
       final candidates = [
         // If running from project root
         {
           'python': r'.\venv\Scripts\python.exe',
           'script': r'.\backend\main.py',
+        },
+        // If running from frontend/ (Development)
+        {
+          'python': r'..\venv\Scripts\python.exe',
+          'script': r'..\backend\main.py',
         },
         // If running from build/windows/runner/Debug
         {
@@ -41,12 +44,11 @@ class BackendManager {
 
       bool found = false;
       for (final paths in candidates) {
-        if (await File(paths['python']!).exists()) {
+        var pyFile = File(paths['python']!);
+        if (await pyFile.exists()) {
           pythonExecutable = paths['python']!;
           scriptPath = paths['script']!;
-          print(
-            "Found Python environment at: ${File(pythonExecutable).absolute.path}",
-          );
+          print("Found Python environment at: ${pyFile.absolute.path}");
           found = true;
           break;
         }
@@ -56,7 +58,10 @@ class BackendManager {
         print(
           "WARNING: Could not find venv python.exe in candidate paths. Trying default global python.",
         );
-        // Try to verify if global python exists, otherwise this will fail
+        // If we are in frontend, script needs to be ../backend/main.py roughly
+        if (File(r'..\backend\main.py').existsSync()) {
+          scriptPath = r'..\backend\main.py';
+        }
       }
     } else {
       pythonExecutable =

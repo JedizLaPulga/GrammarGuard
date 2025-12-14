@@ -71,8 +71,13 @@ def check_grammar(request: GrammarRequest):
         
         # 2. Spell Checker Fix
         for i, token in enumerate(sent):
-            # Skip non-alpha characters and entities (like names)
-            if not token.is_alpha or token.ent_type_:
+            # Skip non-alpha characters
+            if not token.is_alpha:
+                continue
+                
+            # Skip entities ONLY if they seem to be acting as proper nouns (capitalized)
+            # spaCy sometimes misclassifies lowercase garbage as ORG, so we shouldn't skip those.
+            if token.ent_type_ and not token.text[0].islower():
                 continue
                 
             # extracting the word part from the potentially modified token string
